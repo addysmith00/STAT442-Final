@@ -1,0 +1,546 @@
+---
+title: "STAT 442 - Final Project"
+author: "Addy Smith"
+date: "2023-11-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load libraries, echo = FALSE}
+library(readr) # for reading csv
+library(dplyr) 
+library(ggplot2)
+library(tidyverse)
+library(sf) #for reading shape files
+library(randomForest)
+```
+
+```{r load data, echo=FALSE}
+assistance <- read_csv("FoodEnvironmentAtlas/ASSISTANCE.csv", 
+                       col_types = cols(SNAP_OAPP09 = col_factor(levels = c("0", "1")),
+                                        SNAP_OAPP16 = col_factor(levels = c("0", "1")),
+                                        SNAP_CAP09 = col_factor(levels = c("0", "1")),
+                                        SNAP_CAP16 = col_factor(levels = c("0", "1")),
+                                        SNAP_BBCE09 = col_factor(levels = c("0", "1")),
+                                        SNAP_BBCE16 = col_factor(levels = c("0", "1")),
+                                        SNAP_REPORTSIMPLE09 = col_factor(levels = c("0", "1")),
+                                        SNAP_REPORTSIMPLE16 = col_factor(levels = c("0", "1")),
+                                        FDPIR12 = col_factor(levels = c("0", "1")),
+                                        FDPIR15 = col_factor(levels = c("0", "1")),
+                                        PCH_FDPIR_12_15 = col_factor(levels = c("0", "1")),
+                                        FOOD_BANKS18 = col_factor(levels = c("0", "1"))))
+
+access <- read_csv("FoodEnvironmentAtlas/ACCESS.csv")
+health <- read_csv("FoodEnvironmentAtlas/HEALTH.csv")
+insecurity <- read_csv("FoodEnvironmentAtlas/INSECURITY.csv")
+local <- read_csv("FoodEnvironmentAtlas/LOCAL.csv")
+restaurants <- read_csv("FoodEnvironmentAtlas/RESTAURANTS.csv")
+socioeconomic <- read_csv("FoodEnvironmentAtlas/SOCIOECONOMIC.csv",
+                          col_types = cols(PERPOV10 = col_factor(levels = c("0", "1")),
+                                           PERCHLDPOV10 = col_factor(levels = c("0", "1")),
+                                           METRO13 = col_factor(levels = c("0", "1")),
+                                           POPLOSS10 = col_factor(levels = c("0", "1"))))
+stores <- read_csv("FoodEnvironmentAtlas/STORES.csv")
+taxes <- read_csv("FoodEnvironmentAtlas/TAXES.csv")
+```
+
+```{r refine, echo = FALSE}
+access <- access %>%
+  select('FIPS','State','County','LACCESS_POP15','PCT_LACCESS_POP15',
+    'LACCESS_LOWI15','PCT_LACCESS_LOWI15','LACCESS_HHNV15','PCT_LACCESS_HHNV15',
+    'LACCESS_SNAP15','PCT_LACCESS_SNAP15','LACCESS_CHILD15','PCT_LACCESS_CHILD15',
+    'LACCESS_SENIORS15','PCT_LACCESS_SENIORS15','PCT_LACCESS_WHITE15','PCT_LACCESS_BLACK15',
+    'PCT_LACCESS_HISP15','PCT_LACCESS_NHASIAN15','PCT_LACCESS_NHNA15','PCT_LACCESS_NHPI15',
+    'PCT_LACCESS_MULTIR15'
+  )
+
+stores <- stores %>%
+  select('FIPS','State','County', 'GROCPTH16', 'SUPERCPTH16', 
+         'CONVSPTH16', 'SNAPSPTH17', 'WICSPTH16')
+
+restaurants <- restaurants %>%
+  select('FIPS','State','County', 'FFRPTH16', 'FSRPTH16',
+         'PC_FFRSALES12', 'PC_FSRSALES12')
+
+assistance <- assistance %>%
+  select('FIPS','State','County', 'REDEMP_SNAPS17', 'PCT_SNAP17',
+         'PC_SNAPBEN17', 'PCT_NSLP17', 'PCT_FREE_LUNCH15',
+         'PCT_REDUCED_LUNCH15', 'PCT_SBP17', 'PC_WIC_REDEMP16', 'REDEMP_WICS16', 
+         'PCT_WIC17', 'PCT_WICINFANTCHILD16', 'FDPIR15', 'FOOD_BANKS18')
+
+insecurity <- insecurity %>%
+  select('FIPS','State','County', 'FOODINSEC_15_17', 'VLFOODSEC_15_17')
+
+taxes <- taxes %>%
+  select('FIPS','State','County', 'SODATAX_STORES14', 'CHIPSTAX_STORES14', 'FOOD_TAX14')
+
+local <- local %>% 
+  select('FIPS','State','County', 'PCT_LOCLFARM12', 'PCT_LOCLSALE12', 
+         'PC_DIRSALES12', 'FMRKTPTH18', 'FOODHUB18')
+
+health <- health %>%
+  select('FIPS','State','County', 'PCT_DIABETES_ADULTS13', 
+         'PCT_OBESE_ADULTS17', 'PCT_HSPA17', 'RECFACPTH16')
+
+socioeconomic <- socioeconomic %>%
+  select('FIPS','State','County', 
+         'PCT_NHWHITE10', 'PCT_NHBLACK10', 'PCT_HISP10', 'PCT_NHASIAN10', 'PCT_NHNA10', 
+         'PCT_NHPI10', 'PCT_65OLDER10', 'PCT_18YOUNGER10', 'MEDHHINC15', 'POVRATE15',
+         'PERPOV10', 'CHILDPOVRATE15', 'PERCHLDPOV10', 'METRO13', 'POPLOSS10')
+```
+
+```{r eda on tabs, echo = FALSE}
+sum(is.na(access))
+sum(is.na(stores))
+sum(is.na(restaurants))
+sum(is.na(assistance))
+sum(is.na(insecurity))
+sum(is.na(taxes))
+sum(is.na(local))
+sum(is.na(health))
+sum(is.na(socioeconomic))
+```
+
+```{r merge, echo = FALSE}
+join1 <- left_join(access, stores, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join2 <- left_join(join1, restaurants, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join3 <- left_join(join2, assistance, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join4 <- left_join(join3, insecurity, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join5 <- left_join(join4, taxes, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join6 <- left_join(join5, local, by = c('FIPS', 'State', 'County'), keep = FALSE)
+join7 <- left_join(join6, health, by = c('FIPS', 'State', 'County'), keep = FALSE)
+merged_data <- left_join(join7, socioeconomic, by = c('FIPS', 'State', 'County'), keep = FALSE)
+```
+
+```{r EDA1, echo = FALSE}
+avg_insecurity <- merged_data %>%
+  group_by(State) %>%
+  summarise(avg_value = mean(FOODINSEC_15_17, na.rm = TRUE)) %>%
+  arrange(avg_value) %>%
+  mutate(State = factor(State, levels = State))
+
+us_avg <- mean(avg_insecurity$avg_value, na.rm = TRUE)
+
+ggplot(avg_insecurity, aes(x = State, y = avg_value, fill = avg_value > us_avg)) +
+  geom_bar(stat = "identity", color = "black", size = 0.25) +
+  scale_fill_manual(values = c("azure3", "azure4")) + 
+  labs(title = "Prevalence of Household-Level Food Insecurity by State",
+       x = "State", 
+       y = "Percent") +
+  theme(axis.text.x = element_text(size = 6, angle = 90, hjust = 1)) + 
+  geom_hline(yintercept = us_avg, 
+             linetype = "solid", 
+             color = "red2", 
+             size = 1.25) +
+  guides(fill = guide_legend("Higher than U.S. Average (12.32%)"),
+         color = guide_legend("Overall Average")) +
+  theme(legend.position = "bottom")
+```
+
+```{r EDA2, echo = FALSE}
+avg_pov_data <- merged_data %>%
+  group_by(State) %>%
+  summarise(avg_value = mean(POVRATE15, na.rm = TRUE)) %>%
+  arrange(avg_value) %>%
+  mutate(State = factor(State, levels = State))
+
+us_avg <- mean(merged_data$POVRATE15, na.rm = TRUE)
+
+ggplot(avg_pov_data, aes(x = State, 
+                                  y = avg_value, 
+                                  fill = avg_value > us_avg)) +
+  geom_bar(stat = "identity", color = "black", size = 0.25) +
+  scale_fill_manual(values = c("azure3", "azure4")) + 
+  labs(title = "Poverty Rate by State",
+       x = "State", 
+       y = "Percent") +
+  theme(axis.text.x = element_text(size = 6, angle = 90, hjust = 1)) + 
+  geom_hline(yintercept = us_avg, 
+             linetype = "solid", 
+             color = "red2", 
+             size = 1.25) +
+  guides(fill = guide_legend("Higher than U.S. Average (16.26%)"),
+         color = guide_legend("Overall Average")) +
+  theme(legend.position = "bottom")
+```
+
+```{r EDA3, echo = FALSE}
+avg_snap_dollars <- merged_data %>%
+  group_by(State) %>%
+  summarise(avg_value = mean(PC_SNAPBEN17, na.rm = TRUE)) %>%
+  arrange(avg_value) %>%
+  mutate(State = factor(State, levels = State))
+
+us_avg <- mean(avg_snap_dollars$avg_value, na.rm = TRUE)
+
+ggplot(avg_snap_dollars, aes(x = State, 
+                                  y = avg_value, 
+                                  fill = avg_value > us_avg)) +
+  geom_bar(stat = "identity", color = "black", size = 0.25) +
+  scale_fill_manual(values = c("azure3", "azure4")) + 
+  labs(title = "Average Monthly Dollar Amount of SNAP Benefits",
+       x = "State", 
+       y = "Percent") +
+  theme(axis.text.x = element_text(size = 6, angle = 90, hjust = 1)) + 
+  geom_hline(yintercept = us_avg, 
+             linetype = "solid", 
+             color = "red2", 
+             size = 1.25) +
+  guides(fill = guide_legend("Higher than U.S. Average ($16.39)"),
+         color = guide_legend("Overall Average")) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+snap_insec_data <- merge(avg_insecurity, avg_snap_dollars, by = "State")
+snap_insec_data <- snap_insec_data %>%
+  rename(avg_insec = "avg_value.x", avg_snap_dol = "avg_value.y")
+
+correlation <- cor(snap_insec_data$avg_snap_dol, snap_insec_data$avg_insec)
+
+ggplot(snap_insec_data, aes(x = avg_snap_dol, y = avg_insec)) +
+  geom_label(label = snap_insec_data$State,
+             fill = "transparent", color = "black", size = 3,
+             label.padding = unit(0.1, "lines"), box.padding = unit(0.2, "lines")) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue", linetype = "dotted") +
+  labs(title = "Scatterplot of SNAP Dollars vs. Food Insecurity Rate",
+       x = "Average Monthly SNAP Dollars",
+       y = "Average Food Insecurity Rate") +
+  annotate("text", x = max(snap_insec_data$avg_snap_dol), y = max(snap_insec_data$avg_insec),
+           label = paste("Correlation:", round(correlation, 2)),
+           hjust = 1, vjust = 1, color = "black") +
+  theme_minimal()
+
+```
+
+```{r insecurity vs poverty}
+avg_pov_rate <- merged_data %>%
+  group_by(State) %>%
+  summarise(avg_value = mean(POVRATE15, na.rm = TRUE)) %>%
+  arrange(avg_value) %>%
+  mutate(State = factor(State, levels = State))
+
+pov_insec_data <- merge(avg_insecurity, avg_pov_rate, by = "State")
+pov_insec_data <- pov_insec_data %>%
+  rename(avg_insec = "avg_value.x", avg_pov_rate = "avg_value.y")
+
+correlation1 <- cor(pov_insec_data$avg_pov_rate, pov_insec_data$avg_insec)
+ggplot(pov_insec_data, aes(x = avg_pov_rate, y = avg_insec)) +
+  geom_label(label = pov_insec_data$State,
+             fill = "transparent", color = "black", size = 3,
+             label.padding = unit(0.1, "lines"), box.padding = unit(0.2, "lines")) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue", linetype = "dotted") +
+  labs(title = "Scatterplot of Poverty Rate vs. Food Insecurity Rate",
+       x = "Poverty Rate",
+       y = "Food Insecurity Rate") +
+  annotate("text", x = max(pov_insec_data$avg_pov_rate), y = max(pov_insec_data$avg_insec),
+           label = paste("Correlation:", round(correlation1, 2)),
+           hjust = 1, vjust = 1, color = "black") +
+  theme_minimal()
+```
+
+```{r regions test}
+pov_insec_data <- pov_insec_data %>%
+  mutate(Region = case_when(
+    State %in% c("AL", "AR", "FL", "GA", "KY", "LA", "OK",
+                 "MS", "NC", "SC", "TN", "VA", "WV", "DC", "TX") ~ "South",
+    State %in% c("AK", "AZ", "CA", "CO", "HI", "ID", 
+                 "MT", "NV", "NM", "OR", "UT", "WA", "WY") ~ "West",
+    State %in% c("CT", "DE", "ME", "MD", "MA", "NH", 
+                 "NJ", "NY", "PA", "RI", "VT") ~ "Northeast",
+    State %in% c("IL", "IN", "IA", "KS", "MI", "MN", 
+                 "MO", "NE", "ND", "OH", "SD", "WI") ~ "Midwest",
+    TRUE ~ "Unknown"  # Default case for any other states not covered
+    )
+  )
+
+
+shapiro.test(pov_insec_data$avg_insec)
+anova1 <- aov(avg_insec ~ Region, data = pov_insec_data)
+summary(anova1)
+
+
+shapiro.test(pov_insec_data$avg_pov_rate)
+kruskal.test(avg_pov_rate ~ Region, data = pov_insec_data)
+pairwise.wilcox.test(pov_insec_data$avg_pov_rate, pov_insec_data$Region, 
+                     p.adjust.method = "bonf")
+```
+
+```{r rates by region}
+ggplot(pov_insec_data, aes(x = Region, y = avg_insec, fill = Region)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Reds") + 
+  geom_jitter(position = position_jitter(0.2), alpha = 0.7) +
+  labs(title = "Boxplot of Food Insecurity Rate by Region",
+       x = "Region",
+       y = "Food Insecurity Rate") +
+  theme_minimal()
+
+
+ggplot(pov_insec_data, aes(x = Region, y = avg_pov_rate, fill = Region)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Blues") + 
+  geom_jitter(position = position_jitter(0.2), alpha = 0.7) +
+  labs(title = "Boxplot of Poverty Rate by Region",
+       x = "Region",
+       y = "Poverty Rate") +
+  theme_minimal()
+```
+
+```{r EDA4, echo = FALSE}
+sd <- subset(merged_data, State == "SD")
+```
+
+```{r EDA5, echo = FALSE}
+counties <- st_read("South_Dakota_County_Boundaries.shp")
+
+counties <- counties %>%
+  mutate(County = c("Campbell", "Harding", "Codington", 
+                    "Bon Homme", "Bennett", "Roberts", 
+                    "Todd", "Turner", "Davison", 
+                    "Stanley", "Aurora", "Pennington", 
+                    "Lincoln", "Perkins", "Brookings", 
+                    "Buffalo", "Mellette", "Potter", 
+                    "Fall River", "Hughes", "Hyde", 
+                    "Hamlin", "Edmunds", "Hand", 
+                    "Spink", "Faulk", "Butte", 
+                    "Meade", "McPherson", "Shannon", 
+                    "Charles Mix", "Union", "Day", 
+                    "Tripp", "Sanborn", "Corson",
+                    "Gregory", "Grant", "Marshall", 
+                    "Minnehaha", "Hutchinson", "Moody", 
+                    "Douglas", "Deuel", "Clark", 
+                    "Miner", "Jerauld", "McCook", 
+                    "Lawrence", "Ziebach", "Brule",
+                    "Sully", "Walworth", "Kingsbury", 
+                    "Haakon", "Hanson", "Dewey", 
+                    "Clay", "Yankton", "Brown", 
+                    "Lake", "Lyman", "Jackson", 
+                    "Custer", "Beadle", "Jones"))
+
+sd_merged <- left_join(sd, counties, by = c('County'), keep = FALSE)
+
+ggplot() +
+  geom_sf(data = sd_merged, 
+          aes(geometry = geometry, 
+              fill = PCT_DIABETES_ADULTS13)) +
+  labs(title = "South Dakota Counties - Adult Diabetes (%)") +
+  scale_fill_gradient(low = "lightgray", 
+                      high = "red2", 
+                      name = " ") +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(), 
+        axis.ticks = element_blank(), 
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank())
+
+
+ggplot() +
+  geom_sf(data = sd_merged, 
+          aes(geometry = geometry, 
+              fill = factor(PERPOV10))) +
+  scale_fill_manual(values = c("gray", "red")) +  
+  labs(title = "South Dakota Counties - Persistent Poverty Indicator") +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(), 
+        axis.ticks = element_blank(), 
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        legend.title = element_blank())
+
+```
+
+```{r national and state average, echo = FALSE}
+mean(sd$PCT_DIABETES_ADULTS13, na.rm = TRUE)
+mean(merged_data$PCT_DIABETES_ADULTS13, na.rm = TRUE)
+sum(is.na(sd$PCT_DIABETES_ADULTS13))
+sum(is.na(merged_data$PCT_DIABETES_ADULTS13))
+
+mean(sd$POVRATE15, na.rm = TRUE)
+mean(merged_data$POVRATE15, na.rm = TRUE)
+sum(is.na(sd$POVRATE15))
+sum(is.na(merged_data$POVRATE15))
+
+mean(sd$MEDHHINC15, na.rm = TRUE)
+mean(merged_data$MEDHHINC15, na.rm = TRUE)
+sum(is.na(sd$MEDHHINC15))
+sum(is.na(merged_data$MEDHHINC15))
+
+mean(sd$PCT_FREE_LUNCH15, na.rm = TRUE)
+mean(merged_data$PCT_FREE_LUNCH15, na.rm = TRUE)
+sum(is.na(sd$PCT_FREE_LUNCH15))
+sum(is.na(merged_data$PCT_FREE_LUNCH15))
+
+mean(sd$PCT_REDUCED_LUNCH15, na.rm = TRUE)
+mean(merged_data$PCT_REDUCED_LUNCH15, na.rm = TRUE)
+sum(is.na(sd$PCT_REDUCED_LUNCH15))
+sum(is.na(merged_data$PCT_REDUCED_LUNCH15))
+
+mean(sd$PCT_LACCESS_CHILD15, na.rm = TRUE)
+mean(merged_data$PCT_LACCESS_CHILD15, na.rm = TRUE)
+sum(is.na(sd$PCT_LACCESS_CHILD15))
+sum(is.na(merged_data$PCT_LACCESS_CHILD15))
+
+mean(sd$PC_SNAPBEN17, na.rm = TRUE)
+mean(merged_data$PC_SNAPBEN17, na.rm = TRUE)
+sum(is.na(sd$PC_SNAPBEN17))
+sum(is.na(merged_data$PC_SNAPBEN17))
+
+mean(sd$PCT_LACCESS_LOWI15, na.rm = TRUE)
+mean(merged_data$PCT_LACCESS_LOWI15, na.rm = TRUE)
+sum(is.na(sd$PCT_LACCESS_LOWI15))
+sum(is.na(merged_data$PCT_LACCESS_LOWI15))
+```
+
+```{r compare counties, echo = FALSE}
+counties_to_keep <- c("Shannon", "Bennett", "Jackson", 
+                      "Mellette", "Todd", "Ziebach",
+                       "Corson", "Dewey", "Haakon", 
+                      "Stanley", "Jones", "Lyman", 
+                      "Hughes", "Sully", "Hyde", 
+                      "Brule", "Gregory", "Marshall", 
+                      "Day", "Buffalo", "Charles Mix", "Roberts")
+
+county_compare <- sd[sd$County %in% counties_to_keep, ]
+county_compare <- county_compare %>%
+  mutate(County = ifelse(County == "Shannon", "Oglala Lakota", County))
+
+
+ggplot(county_compare, aes(x = factor(PERPOV10), y = GROCPTH16, fill = PERPOV10)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Reds") + 
+  geom_jitter(position = position_jitter(0.2), alpha = 0.7) +
+  labs(title = "Boxplot of Grocery Stores/1,000 Pop.",
+       x = "Persistent Poverty Indicator",
+       y = "Grocery Stores/1,000 Pop.") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+ggplot(county_compare, aes(x = factor(PERPOV10), y = CONVSPTH16, fill = PERPOV10)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Blues") + 
+  geom_jitter(position = position_jitter(0.2), alpha = 0.7) +
+  labs(title = "Boxplot of Convenience Stores/1,000 Pop.",
+       x = "Persistent Poverty Indicator",
+       y = "Convenience Stores/1,000 Pop.") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+shapiro.test(county_compare$GROCPTH16)
+group1 <- county_compare$GROCPTH16[county_compare$PERPOV10 == 0]
+group2 <- county_compare$GROCPTH16[county_compare$PERPOV10 == 1]
+t.test(group1, group2)
+
+
+shapiro.test(county_compare$CONVSPTH16)
+group1 <- county_compare$CONVSPTH16[county_compare$PERPOV10 == 0]
+group2 <- county_compare$CONVSPTH16[county_compare$PERPOV10 == 1]
+t.test(group1, group2)
+
+
+ggplot(county_compare, aes(x = factor(PERPOV10), y = PCT_DIABETES_ADULTS13, fill = PERPOV10)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Greens") + 
+  geom_jitter(position = position_jitter(0.2), alpha = 0.7) +
+  labs(title = "Boxplot of Adult Diabetes Rate",
+       x = "Persistent Poverty Indicator",
+       y = "Adult Diabetes Rate") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+shapiro.test(county_compare$PCT_DIABETES_ADULTS13)
+group1 <- county_compare$PCT_DIABETES_ADULTS13[county_compare$PERPOV10 == 0]
+group2 <- county_compare$PCT_DIABETES_ADULTS13[county_compare$PERPOV10 == 1]
+wilcox.test(group1, group2)
+```
+
+```{r random forest, echo = FALSE}
+selected_columns <- c("PCT_LACCESS_LOWI15", "GROCPTH16", "CONVSPTH16", 
+                       "FFRPTH16", "PC_SNAPBEN17", "RECFACPTH16", 
+                       "PCT_65OLDER10", "PCT_18YOUNGER10", "MEDHHINC15", 
+                       "POVRATE15", "PERPOV10", "METRO13", 
+                       "PCT_DIABETES_ADULTS13")
+
+rf_data <- merged_data[, selected_columns, drop = FALSE]
+rf_data <- na.omit(rf_data)
+
+set.seed(123)  # Set seed for reproducibility
+train_indices <- sample(1:nrow(rf_data), 0.8 * nrow(rf_data))
+train_data <- rf_data[train_indices, ]
+test_data <- rf_data[-train_indices, ]
+
+formula <- PCT_DIABETES_ADULTS13 ~ PCT_LACCESS_LOWI15 + GROCPTH16 + CONVSPTH16 + FFRPTH16 + PC_SNAPBEN17 + RECFACPTH16 + PCT_65OLDER10 + PCT_18YOUNGER10 + MEDHHINC15 + POVRATE15 + PERPOV10 + METRO13
+
+rf_model <- randomForest(formula, 
+                         data = train_data, 
+                         ntree = 500)
+print(rf_model)
+plot(rf_model)
+varImpPlot(rf_model)
+
+predictions <- predict(rf_model, newdata = test_data)
+pred_data <- data.frame(Actual = test_data$PCT_DIABETES_ADULTS13, 
+                        Predicted = predictions)
+
+
+ggplot(pred_data, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red", 
+              linetype = "dashed", size = 1) +
+  labs(x = "Actual Diabetes Rate", y = "Predicted Diabetes Rate", 
+       title = "Actual vs. Predicted Diabetes Rate")
+
+sqrt(mean((test_data$PCT_DIABETES_ADULTS13 - predictions)^2)) #RMSE
+
+############### start new model ################
+model_tuned <- tuneRF(
+               x=rf_data[,-13], #define predictor variables
+               y=rf_data$PCT_DIABETES_ADULTS13, #define response variable
+               ntreeTry=500,
+               mtryStart=3, 
+               stepFactor=1.5,
+               improve=0.01,
+               trace=FALSE #don't show real-time progress
+               )
+
+
+rf_model2 <- randomForest(PCT_DIABETES_ADULTS13 ~ GROCPTH16 + CONVSPTH16 + 
+                            PC_SNAPBEN17 + PCT_65OLDER10 + PCT_18YOUNGER10 + 
+                            MEDHHINC15 + POVRATE15, 
+                          data = train_data, 
+                          mtry = 3, 
+                          ntree = 200)
+
+print(rf_model2)
+plot(rf_model2)
+varImpPlot(rf_model2)
+
+predictions2 <- predict(rf_model2, newdata = test_data)
+pred_data2 <- data.frame(Actual = test_data$PCT_DIABETES_ADULTS13, 
+                        Predicted = predictions2)
+
+ggplot(pred_data2, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red", 
+              linetype = "dashed", size = 1) +
+  labs(x = "Actual Diabetes Rate", y = "Predicted Diabetes Rate", 
+       title = "Actual vs. Predicted Diabetes Rate")
+
+sqrt(mean((test_data$PCT_DIABETES_ADULTS13 - predictions2)^2)) #RMSE
+
+
+```
